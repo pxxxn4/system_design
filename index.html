@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Raft Cluster — Live Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0e0e10;
+    --surface: #18181b;
+    --surface2: #1f1f23;
+    --border: rgba(255,255,255,0.08);
+    --border2: rgba(255,255,255,0.14);
+    --text: #e4e4e7;
+    --muted: #71717a;
+    --leader: #22c55e;
+    --follower: #3b82f6;
+    --candidate: #f59e0b;
+    --crashed: #ef4444;
+    --accent: #8b5cf6;
+    --font: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    min-height: 100vh;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .logo-dot {
+    width: 8px; height: 8px;
+    background: var(--leader);
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .status-bar span { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .dot.green { background: var(--leader); }
+  .dot.blue { background: var(--follower); }
+  .dot.amber { background: var(--candidate); }
+  .dot.red { background: var(--crashed); }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 0;
+    height: calc(100vh - 57px);
+  }
+
+  .main { padding: 20px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+  .sidebar { border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+
+  /* ─── topology ─── */
+  .topology-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+
+  .section-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+
+  .topology-svg-wrap { display: flex; justify-content: center; }
+
+  /* ─── nodes grid ─── */
+  .nodes-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+  }
+
+  .node-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    transition: border-color 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .node-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    border-radius: 10px 10px 0 0;
+    background: var(--role-color, var(--border));
+  }
+
+  .node-card.leader   { --role-color: var(--leader); border-color: rgba(34,197,94,0.25); }
+  .node-card.follower { --role-color: var(--follower); }
+  .node-card.candidate{ --role-color: var(--candidate); border-color: rgba(245,158,11,0.25); }
+  .node-card.crashed  { --role-color: var(--crashed); opacity: 0.55; }
+
+  .node-id { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .node-role {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 10px;
+  }
+
+  .node-card.leader   .node-role { background: rgba(34,197,94,0.15); color: var(--leader); }
+  .node-card.follower .node-role { background: rgba(59,130,246,0.15); color: var(--follower); }
+  .node-card.candidate .node-role { background: rgba(245,158,11,0.15); color: var(--candidate); }
+  .node-card.crashed  .node-role { background: rgba(239,68,68,0.15); color: var(--crashed); }
+
+  .node-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+
+  .stat { display: flex; flex-direction: column; gap: 1px; }
+  .stat-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .stat-val { font-size: 13px; color: var(--text); }
+
+  .node-btns { display: flex; gap: 6px; margin-top: 10px; }
+  .btn {
+    flex: 1;
+    padding: 5px 0;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--muted);
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: var(--font);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    transition: all 0.15s;
+  }
+  .btn:hover { background: var(--surface2); color: var(--text); }
+  .btn.danger { border-color: rgba(239,68,68,0.3); }
+  .btn.danger:hover { background: rgba(239,68,68,0.1); color: var(--crashed); }
+  .btn.recover { border-color: rgba(34,197,94,0.3); }
+  .btn.recover:hover { background: rgba(34,197,94,0.1); color: var(--leader); }
+
+  /* ─── JSON editor / state ─── */
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+
+  .panel-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .state-json {
+    font-family: var(--font);
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    color: var(--text);
+    max-height: 260px;
+    overflow-y: auto;
+    word-break: break-all;
+  }
+
+  .key   { color: #7dd3fc; }
+  .str   { color: #86efac; }
+  .num   { color: #fca5a5; }
+  .bool  { color: #fdba74; }
+  .null  { color: var(--muted); }
+
+  .write-form { display: flex; flex-direction: column; gap: 8px; }
+
+  .form-row { display: flex; gap: 6px; align-items: center; }
+  .form-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); width: 40px; flex-shrink: 0; }
+
+  input, select {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12px;
+    padding: 6px 8px;
+    outline: none;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+
+  .submit-btn {
+    width: 100%;
+    padding: 8px;
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    font-family: var(--font);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    margin-top: 4px;
+    transition: opacity 0.15s;
+  }
+  .submit-btn:hover { opacity: 0.85; }
+  .submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .result-line {
+    font-size: 11px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    margin-top: 4px;
+  }
+  .result-line.ok  { background: rgba(34,197,94,0.1);  color: var(--leader); }
+  .result-line.err { background: rgba(239,68,68,0.1);  color: var(--crashed); }
+
+  /* ─── sidebar ─── */
+  .sidebar-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .event-feed {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+
+  .event {
+    display: flex;
+    gap: 10px;
+    padding: 5px 16px;
+    border-bottom: 1px solid transparent;
+    font-size: 11px;
+    line-height: 1.4;
+    animation: fadeIn 0.3s ease;
+  }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; } }
+
+  .event-ts { color: var(--muted); white-space: nowrap; flex-shrink: 0; font-size: 10px; }
+  .event-msg { color: var(--text); word-break: break-all; }
+
+  .event-msg.is-leader   { color: var(--leader); }
+  .event-msg.is-voted    { color: #c084fc; }
+  .event-msg.is-election { color: var(--candidate); }
+  .event-msg.is-commit   { color: #38bdf8; }
+  .event-msg.is-crash    { color: var(--crashed); }
+
+  /* ─── topology svg ─── */
+  .link { stroke: var(--border2); stroke-width: 1.5; }
+  .link.active { stroke: var(--leader); stroke-width: 2; animation: dash 1.5s linear infinite; }
+  @keyframes dash { to { stroke-dashoffset: -20; } }
+
+  .node-circle { cursor: pointer; }
+  .node-circle.leader   { fill: rgba(34,197,94,0.15);  stroke: var(--leader);    stroke-width: 2.5; }
+  .node-circle.follower { fill: rgba(59,130,246,0.12); stroke: var(--follower);  stroke-width: 1.5; }
+  .node-circle.candidate{ fill: rgba(245,158,11,0.15); stroke: var(--candidate); stroke-width: 2; }
+  .node-circle.crashed  { fill: rgba(239,68,68,0.08);  stroke: var(--crashed);   stroke-width: 1.5; stroke-dasharray: 4 3; }
+
+  .node-label { fill: var(--text); font-family: var(--font); font-size: 11px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; }
+  .node-term  { fill: var(--muted); font-family: var(--font); font-size: 9px; text-anchor: middle; dominant-baseline: middle; }
+
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    Raft Cluster
+    <span style="color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 4px;">5-node consensus</span>
+  </div>
+  <div class="status-bar">
+    <span><div class="dot green"></div>Leader</span>
+    <span><div class="dot blue"></div>Follower</span>
+    <span><div class="dot amber"></div>Candidate</span>
+    <span><div class="dot red"></div>Crashed</span>
+    <span id="term-display" style="margin-left: 8px; color: var(--text);">Term —</span>
+    <span id="alive-display" style="color: var(--text);">Alive —/5</span>
+  </div>
+</header>
+
+<div class="layout">
+  <div class="main scrollbar-thin">
+
+    <!-- topology -->
+    <div class="topology-wrap">
+      <div class="section-label">Cluster topology</div>
+      <div class="topology-svg-wrap">
+        <svg id="topology" width="380" height="220" viewBox="0 0 380 220">
+          <g id="links"></g>
+          <g id="topo-nodes"></g>
+        </svg>
+      </div>
+    </div>
+
+    <!-- node cards -->
+    <div class="nodes-grid" id="nodes-grid"></div>
+
+    <!-- panels -->
+    <div class="panels">
+      <div class="panel">
+        <div class="panel-title">
+          <span>Shared state</span>
+          <span id="commit-label" style="color: var(--accent);">idx —</span>
+        </div>
+        <div class="state-json scrollbar-thin" id="state-json">{}</div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Write command</div>
+        <div class="write-form">
+          <div class="form-row">
+            <span class="form-label">Op</span>
+            <select id="op">
+              <option value="set">set</option>
+              <option value="delete">delete</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <span class="form-label">Path</span>
+            <input id="path" placeholder="e.g. user.name" value="counter">
+          </div>
+          <div id="value-row" class="form-row">
+            <span class="form-label">Value</span>
+            <input id="value" placeholder="any JSON value" value="1">
+          </div>
+          <div class="form-row">
+            <span class="form-label">Via</span>
+            <select id="via">
+              <option value="auto">auto (find leader)</option>
+              <option value="node1">node1 :3001</option>
+              <option value="node2">node2 :3002</option>
+              <option value="node3">node3 :3003</option>
+              <option value="node4">node4 :3004</option>
+              <option value="node5">node5 :3005</option>
+            </select>
+          </div>
+          <button class="submit-btn" id="write-btn" onclick="sendWrite()">Send write →</button>
+          <div id="write-result" class="result-line" style="display:none"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- sidebar event feed -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <span>Event log</span>
+      <span id="event-count" style="color: var(--text);">0 events</span>
+    </div>
+    <div class="event-feed scrollbar-thin" id="event-feed"></div>
+  </div>
+</div>
+
+<script>
+const NODES = [
+  { id: 'node1', port: 3001 },
+  { id: 'node2', port: 3002 },
+  { id: 'node3', port: 3003 },
+  { id: 'node4', port: 3004 },
+  { id: 'node5', port: 3005 },
+];
+
+// pentagon positions
+const cx = 190, cy = 110, r = 80;
+const POSITIONS = NODES.map((_, i) => {
+  const angle = (i * 2 * Math.PI / 5) - Math.PI / 2;
+  return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+});
+
+let state = NODES.map(n => ({ ...n, role: 'unknown', term: 0, logLen: 0, commit: -1, lastApplied: -1, events: [] }));
+let sharedState = {};
+let leaderPort = null;
+let allEvents = [];
+let eventCount = 0;
+
+// ─── build SVG topology once ───────────────────────────────────────────────
+
+function buildTopology() {
+  const linksG = document.getElementById('links');
+  const nodesG = document.getElementById('topo-nodes');
+  linksG.innerHTML = '';
+  nodesG.innerHTML = '';
+
+  for (let i = 0; i < 5; i++) {
+    for (let j = i + 1; j < 5; j++) {
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', POSITIONS[i].x);
+      line.setAttribute('y1', POSITIONS[i].y);
+      line.setAttribute('x2', POSITIONS[j].x);
+      line.setAttribute('y2', POSITIONS[j].y);
+      line.className.baseVal = 'link';
+      line.id = `link-${i}-${j}`;
+      linksG.appendChild(line);
+    }
+  }
+
+  NODES.forEach((n, i) => {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    const p = POSITIONS[i];
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', p.x);
+    circle.setAttribute('cy', p.y);
+    circle.setAttribute('r', 26);
+    circle.className.baseVal = 'node-circle follower';
+    circle.id = `topo-circle-${n.id}`;
+
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', p.x);
+    label.setAttribute('y', p.y - 5);
+    label.className.baseVal = 'node-label';
+    label.textContent = n.id;
+
+    const termTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    termTxt.setAttribute('x', p.x);
+    termTxt.setAttribute('y', p.y + 10);
+    termTxt.className.baseVal = 'node-term';
+    termTxt.id = `topo-term-${n.id}`;
+    termTxt.textContent = 'T0';
+
+    g.appendChild(circle);
+    g.appendChild(label);
+    g.appendChild(termTxt);
+    nodesG.appendChild(g);
+  });
+}
+
+// ─── update topology ───────────────────────────────────────────────────────
+
+function updateTopology() {
+  const leader = state.find(s => s.role === 'leader');
+
+  state.forEach((s, i) => {
+    const circle = document.getElementById(`topo-circle-${s.id}`);
+    const termEl = document.getElementById(`topo-term-${s.id}`);
+    if (!circle) return;
+    circle.className.baseVal = `node-circle ${s.role === 'unknown' ? 'follower' : s.role}`;
+    if (termEl) termEl.textContent = `T${s.term}`;
+  });
+
+  for (let i = 0; i < 5; i++) {
+    for (let j = i + 1; j < 5; j++) {
+      const line = document.getElementById(`link-${i}-${j}`);
+      if (!line) continue;
+      const si = state[i], sj = state[j];
+      const active = leader && si.role !== 'crashed' && sj.role !== 'crashed' &&
+                     (si.id === leader.id || sj.id === leader.id);
+      line.className.baseVal = `link ${active ? 'active' : ''}`;
+      if (active) {
+        line.style.strokeDasharray = '6 4';
+        line.style.strokeDashoffset = '0';
+      } else {
+        line.style.strokeDasharray = 'none';
+      }
+    }
+  }
+}
+
+// ─── build node cards ─────────────────────────────────────────────────────
+
+function buildNodeCards() {
+  const grid = document.getElementById('nodes-grid');
+  grid.innerHTML = '';
+  NODES.forEach(n => {
+    const card = document.createElement('div');
+    card.className = 'node-card follower';
+    card.id = `card-${n.id}`;
+    card.innerHTML = `
+      <div class="node-id">${n.id}</div>
+      <div class="node-role" id="role-${n.id}">—</div>
+      <div class="node-stats">
+        <div class="stat"><div class="stat-label">Term</div><div class="stat-val" id="stat-term-${n.id}">0</div></div>
+        <div class="stat"><div class="stat-label">Log</div><div class="stat-val" id="stat-log-${n.id}">0</div></div>
+        <div class="stat"><div class="stat-label">Commit</div><div class="stat-val" id="stat-commit-${n.id}">—</div></div>
+        <div class="stat"><div class="stat-label">Applied</div><div class="stat-val" id="stat-applied-${n.id}">—</div></div>
+      </div>
+      <div class="node-btns">
+        <button class="btn danger" onclick="crashNode('${n.id}', ${n.port})" id="crash-btn-${n.id}">crash</button>
+        <button class="btn recover" onclick="recoverNode('${n.id}', ${n.port})" id="recover-btn-${n.id}">revive</button>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+// ─── update cards ─────────────────────────────────────────────────────────
+
+function updateCards() {
+  let maxTerm = 0;
+  let alive = 0;
+
+  state.forEach(s => {
+    const card = document.getElementById(`card-${s.id}`);
+    if (!card) return;
+
+    const role = s.role === 'unknown' ? 'follower' : s.role;
+    card.className = `node-card ${role}`;
+
+    document.getElementById(`role-${s.id}`).textContent = s.role === 'unknown' ? '?' : s.role;
+    document.getElementById(`stat-term-${s.id}`).textContent = s.term;
+    document.getElementById(`stat-log-${s.id}`).textContent = s.logLen;
+    document.getElementById(`stat-commit-${s.id}`).textContent = s.commit >= 0 ? s.commit : '—';
+    document.getElementById(`stat-applied-${s.id}`).textContent = s.lastApplied >= 0 ? s.lastApplied : '—';
+
+    if (s.term > maxTerm) maxTerm = s.term;
+    if (s.role !== 'crashed' && s.role !== 'unknown') alive++;
+
+    const crashBtn = document.getElementById(`crash-btn-${s.id}`);
+    const recoverBtn = document.getElementById(`recover-btn-${s.id}`);
+    if (crashBtn)   crashBtn.disabled   = s.role === 'crashed';
+    if (recoverBtn) recoverBtn.disabled = s.role !== 'crashed';
+  });
+
+  document.getElementById('term-display').textContent = `Term ${maxTerm}`;
+  document.getElementById('alive-display').textContent = `Alive ${alive}/5`;
+}
+
+// ─── shared state display ─────────────────────────────────────────────────
+
+function syntaxHighlight(json) {
+  const s = JSON.stringify(json, null, 2);
+  return s.replace(/(".*?")(\s*:)/g, '<span class="key">$1</span>$2')
+          .replace(/:\s*(".*?")/g, ': <span class="str">$1</span>')
+          .replace(/:\s*(\d+\.?\d*)/g, ': <span class="num">$1</span>')
+          .replace(/:\s*(true|false)/g, ': <span class="bool">$1</span>')
+          .replace(/:\s*(null)/g, ': <span class="null">$1</span>');
+}
+
+function updateStateDisplay() {
+  const el = document.getElementById('state-json');
+  el.innerHTML = syntaxHighlight(sharedState);
+  const leader = state.find(s => s.role === 'leader');
+  const commitEl = document.getElementById('commit-label');
+  if (leader) commitEl.textContent = `idx ${leader.commit}`;
+}
+
+// ─── event feed ───────────────────────────────────────────────────────────
+
+function classifyEvent(msg) {
+  if (msg.includes('LEADER')) return 'is-leader';
+  if (msg.includes('voted')) return 'is-voted';
+  if (msg.includes('election')) return 'is-election';
+  if (msg.includes('committed')) return 'is-commit';
+  if (msg.includes('CRASH') || msg.includes('crash')) return 'is-crash';
+  return '';
+}
+
+function appendEvents(newEvents) {
+  const feed = document.getElementById('event-feed');
+  newEvents.forEach(ev => {
+    const key = `${ev.ts}-${ev.msg}`;
+    if (seenEvents.has(key)) return;
+    seenEvents.add(key);
+    eventCount++;
+
+    const row = document.createElement('div');
+    row.className = 'event';
+    const d = new Date(ev.ts);
+    const ts = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+    const cls = classifyEvent(ev.msg);
+    row.innerHTML = `<span class="event-ts">${ts}</span><span class="event-msg ${cls}">${ev.msg}</span>`;
+    feed.insertBefore(row, feed.firstChild);
+
+    // trim
+    while (feed.children.length > 200) feed.removeChild(feed.lastChild);
+  });
+  document.getElementById('event-count').textContent = `${eventCount} events`;
+}
+
+const seenEvents = new Set();
+
+// ─── poll ─────────────────────────────────────────────────────────────────
+
+async function poll() {
+  let leaderCandidate = null;
+
+  const fetches = NODES.map(async (n, i) => {
+    try {
+      const r = await fetch(`http://127.0.0.1:${n.port}/api/status`, { signal: AbortSignal.timeout(200) });
+      const data = await r.json();
+      state[i] = {
+        id: n.id, port: n.port,
+        role: data.role,
+        term: data.term,
+        leader: data.leader,
+        logLen: data.logLength,
+        commit: data.commitIndex,
+        lastApplied: data.lastApplied,
+        events: data.events || [],
+      };
+      if (data.role === 'leader') {
+        leaderCandidate = n.port;
+        // fetch shared state from leader
+        const stateRes = await fetch(`http://127.0.0.1:${n.port}/api/read`, { signal: AbortSignal.timeout(200) });
+        const stateData = await stateRes.json();
+        sharedState = stateData.state || {};
+      }
+      appendEvents(data.events || []);
+    } catch {
+      state[i] = { id: n.id, port: n.port, role: 'crashed', term: state[i]?.term || 0, logLen: state[i]?.logLen || 0, commit: state[i]?.commit ?? -1, lastApplied: state[i]?.lastApplied ?? -1, events: [] };
+    }
+  });
+
+  await Promise.allSettled(fetches);
+  leaderPort = leaderCandidate;
+  updateCards();
+  updateTopology();
+  updateStateDisplay();
+}
+
+// ─── write ────────────────────────────────────────────────────────────────
+
+async function sendWrite() {
+  const op    = document.getElementById('op').value;
+  const path  = document.getElementById('path').value.trim();
+  const valEl = document.getElementById('value');
+  const via   = document.getElementById('via').value;
+  const btn   = document.getElementById('write-btn');
+  const res   = document.getElementById('write-result');
+
+  if (!path) return;
+
+  let value;
+  if (op === 'set') {
+    try { value = JSON.parse(valEl.value); } catch { value = valEl.value; }
+  }
+
+  let targetPort;
+  if (via === 'auto') {
+    targetPort = leaderPort;
+    if (!targetPort) {
+      showResult(res, false, 'No leader found. Retry in a moment.');
+      return;
+    }
+  } else {
+    const nodeNum = via.replace('node', '');
+    targetPort = 3000 + Number(nodeNum);
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+
+  try {
+    const r = await fetch(`http://127.0.0.1:${targetPort}/api/write`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: { op, path, value } }),
+      signal: AbortSignal.timeout(1000),
+    });
+    const data = await r.json();
+    if (data.success) {
+      showResult(res, true, `✓ logged at index ${data.index}`);
+    } else {
+      showResult(res, false, `✗ ${data.reason || 'rejected'} — leader is ${data.leaderId || '?'}`);
+    }
+  } catch (e) {
+    showResult(res, false, `✗ network error: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Send write →';
+  }
+}
+
+function showResult(el, ok, msg) {
+  el.style.display = 'block';
+  el.className = `result-line ${ok ? 'ok' : 'err'}`;
+  el.textContent = msg;
+  setTimeout(() => { el.style.display = 'none'; }, 3500);
+}
+
+// ─── crash / recover ─────────────────────────────────────────────────────
+
+async function crashNode(id, port) {
+  try {
+    await fetch(`http://127.0.0.1:${port}/api/crash`, { method: 'POST', signal: AbortSignal.timeout(500) });
+  } catch { /* node might not respond after crash */ }
+}
+
+async function recoverNode(id, port) {
+  try {
+    await fetch(`http://127.0.0.1:${port}/api/recover`, { method: 'POST', signal: AbortSignal.timeout(500) });
+  } catch {}
+}
+
+// ─── op toggle ────────────────────────────────────────────────────────────
+
+document.getElementById('op').addEventListener('change', function() {
+  document.getElementById('value-row').style.display = this.value === 'delete' ? 'none' : 'flex';
+});
+
+// ─── init ─────────────────────────────────────────────────────────────────
+
+buildTopology();
+buildNodeCards();
+poll();
+setInterval(poll, 500);
+</script>
+</body>
+</html>
